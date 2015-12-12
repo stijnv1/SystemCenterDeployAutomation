@@ -24,7 +24,7 @@ param
 	[int]$VMStartupMemory,
 
 	[Parameter(Mandatory=$false)]
-	[int]$VLANId
+    [int]$VLANId
 )
 
 Workflow WF_DeployVMs
@@ -130,23 +130,28 @@ Workflow WF_DeployVMs
 		Copy-File "$VMTemplatePath" -to "$VMRootPath\$VMName\$vhdxName"
 	}
 
-	#create a standalone VM
-	Write-Host "Creating Standalone VM"
-    $minMemory = $VMMinMemory * 1024 * 1024
-    $maxMemory = $VMMaxMemory * 1024 * 1024
-    $startMemory = $VMStartupMemory * 1024 * 1024
-    New-VM -Name $VMName -SwitchName $SwitchName -VHDPath "$VMRootPath\$VMName\$vhdxName" -Path "$VMRootPath\$VMName\"
-    $createdVM = Get-VM -Name $VMName
-
-	#if VLANs are in use
-	if ($VLANId)
+	foreach ($VMName in $VMNames)
 	{
-		Get-VMNetworkAdapter -VM $createdVM | Set-VMNetworkAdapterVlan -Access -VlanId $VMVlanID
-	}
+		#create a standalone VM
+		$vhdxName = "$($VMName)_C.vhdx"
+		Write-Output "Creating Standalone VM"
+		$minMemory = $VMMinMemory * 1024 * 1024
+		$maxMemory = $VMMaxMemory * 1024 * 1024
+		$startMemory = $VMStartupMemory * 1024 * 1024
+		New-VM -Name $VMName -SwitchName $SwitchName.Name -VHDPath "$VMRootPath\$VMName\$vhdxName" -Path "$VMRootPath\$VMName\"
+		$createdVM = Get-VM -Name $VMName
+
+		#if VLANs are in use
+		if ($VLANId)
+		{
+			Get-VMNetworkAdapter -VM $createdVM | Set-VMNetworkAdapterVlan -Access -VlanId $VMVlanID
+		}
     
-    Set-VM -VM $createdVM -ProcessorCount $VMprocessorCount -AutomaticStopAction ShutDown
-    Set-VMMemory -VM $createdVM -DynamicMemoryEnabled $true -MinimumBytes $minMemory -MaximumBytes $maxMemory -StartupBytes $startMemory -Buffer 20
+		Set-VM -VM $createdVM -ProcessorCount $VMprocessorCount -AutomaticStopAction ShutDown
+		Set-VMMemory -VM $createdVM -DynamicMemoryEnabled $true -MinimumBytes $minMemory -MaximumBytes $maxMemory -StartupBytes $startMemory -Buffer 20
+		Start-VM -VM $createdVM
+	}
 }
 
 #start workflow
-WF_DeployVMs -VMNames $VMNames -VMRootPath $VMRootPath -VMTemplatePath $VMTemplatePath
+WF_DeployVMs -VMNames $VMNames -VMRootPath $VMRootPath -VMTemplatePath $VMTemplatePath -VMMinMemory $VMMinMemory -VMMaxMemory $VMMaxMemory -VMStartupMemory $VMStartupMemory
