@@ -30,7 +30,7 @@
   <ItemGroup>
     <Compile Include="DSC_ParentScript.ps1" />
     <Compile Include="DSC_SQL2014Install.ps1" />
-    <Compile Include="EnableFirewallRules.ps1" />
+    <Compile Include="SetupCompleteScript.ps1" />
     <Compile Include="RenameVMOS.ps1" />
     <Compile Include="Script.ps1" />
     <Compile Include="WF_DeployVMs.ps1" />
