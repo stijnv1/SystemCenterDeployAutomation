@@ -23,6 +23,9 @@ param
 	[Parameter(Mandatory=$true)]
 	[int]$VMStartupMemory,
 
+	[Parameter(Mandatory=$true)]
+	[int]$VMprocessorCount,
+
 	[Parameter(Mandatory=$false)]
     [int]$VLANId
 )
@@ -48,6 +51,9 @@ Workflow WF_DeployVMs
 
 		[Parameter(Mandatory=$true)]
 		[int]$VMStartupMemory,
+
+		[Parameter(Mandatory=$true)]
+		[int]$VMprocessorCount,
 
 		[Parameter(Mandatory=$false)]
 		[int]$VLANId
@@ -106,6 +112,8 @@ Workflow WF_DeployVMs
 
 		finally 
 		{
+			$ffile.Dispose()
+			$tofile.Dispose()
 			write-output (($from.Split("\")|select -last 1) + `
 				" copied in " + $secselapsed + " seconds at " + `
 				"{0:n2}" -f [int](($ffile.length/$secselapsed)/1mb) + " MB/s.");
@@ -122,36 +130,64 @@ Workflow WF_DeployVMs
 	}
 
 	#start parallel copy action
-	foreach -parallel ($VMName in $VMNames)
+	foreach ($VMName in $VMNames)
 	{
 		#copy VHDX file
 		$vhdxName = "$($VMName)_C.vhdx"
 		Write-Output "Start Copy template VHDX file"
 		Copy-File "$VMTemplatePath" -to "$VMRootPath\$VMName\$vhdxName"
-	}
 
-	foreach ($VMName in $VMNames)
-	{
 		#create a standalone VM
-		$vhdxName = "$($VMName)_C.vhdx"
-		Write-Output "Creating Standalone VM"
+		#$vhdxName = "$($VMName)_C.vhdx"
+		Write-Output "Creating Standalone VM $VMName"
 		$minMemory = $VMMinMemory * 1024 * 1024
 		$maxMemory = $VMMaxMemory * 1024 * 1024
 		$startMemory = $VMStartupMemory * 1024 * 1024
-		New-VM -Name $VMName -SwitchName $SwitchName.Name -VHDPath "$VMRootPath\$VMName\$vhdxName" -Path "$VMRootPath\$VMName\"
-		$createdVM = Get-VM -Name $VMName
+		New-VM -Name $VMName -SwitchName $SwitchName.Name -VHDPath "$VMRootPath\$VMName\$vhdxName" -Path "$VMRootPath\$VMName\" -Generation 2 -BootDevice VHD
+		#$createdVM = Get-VM -Name $VMName
 
 		#if VLANs are in use
 		if ($VLANId)
 		{
-			Get-VMNetworkAdapter -VM $createdVM | Set-VMNetworkAdapterVlan -Access -VlanId $VMVlanID
+			Get-VMNetworkAdapter -VMName $VMName | Set-VMNetworkAdapterVlan -Access -VlanId $VMVlanID
 		}
     
-		Set-VM -VM $createdVM -ProcessorCount $VMprocessorCount -AutomaticStopAction ShutDown
-		Set-VMMemory -VM $createdVM -DynamicMemoryEnabled $true -MinimumBytes $minMemory -MaximumBytes $maxMemory -StartupBytes $startMemory -Buffer 20
-		Start-VM -VM $createdVM
+		Set-VM -Name $VMName -ProcessorCount $VMprocessorCount -AutomaticStopAction ShutDown
+		Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes $minMemory -MaximumBytes $maxMemory -StartupBytes $startMemory -Buffer 20
+		Start-VM -Name $VMName
 	}
 }
 
 #start workflow
-WF_DeployVMs -VMNames $VMNames -VMRootPath $VMRootPath -VMTemplatePath $VMTemplatePath -VMMinMemory $VMMinMemory -VMMaxMemory $VMMaxMemory -VMStartupMemory $VMStartupMemory
+WF_DeployVMs -VMNames $VMNames -VMRootPath $VMRootPath -VMTemplatePath $VMTemplatePath -VMMinMemory $VMMinMemory -VMMaxMemory $VMMaxMemory -VMStartupMemory $VMStartupMemory -VMprocessorCount $VMprocessorCount
+
+foreach ($VM in $VMNames)
+{
+	Write-Host "Enabling guest services for powershell direct access for VM $VM"
+	Get-VMIntegrationService -VMName $VM -Name "Guest Service Interface" | Enable-VMIntegrationService
+}
+
+$ScriptBlock = {
+param($computerName)
+	Enable-NetFirewallRule -DisplayName "Remote Desktop - User Mode (TCP-In)"
+	Enable-NetFirewallRule -DisplayName "Remote Desktop - Shadow (TCP-In)"
+	Enable-NetFirewallRule -DisplayName "Remote Desktop - User Mode (UDP-In)"
+	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)"
+	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (SMB-In)"
+	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (NB-Name-In)"
+	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (NB-Datagram-In)"
+	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (NB-Session-In)"
+
+	Rename-Computer -NewName $computerName -Restart
+}
+
+$localPassword = ConvertTo-SecureString "F5rr1nt9" -AsPlainText -Force
+$localVMCred = New-Object System.Management.Automation.PSCredential ("Administrator", $localPassword)
+
+foreach ($VM in $VMNames)
+{
+
+	Invoke-Command -VMName $VM -ScriptBlock $ScriptBlock -Credential $localVMCred -ArgumentList $VM
+}
+
+
