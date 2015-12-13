@@ -27,7 +27,16 @@ param
 	[int]$VMprocessorCount,
 
 	[Parameter(Mandatory=$false)]
-    [int]$VLANId
+    [int]$VLANId,
+
+	[string]$SQLServiceAccountUsername,
+	[string]$SQLServiceAccountPassword,
+	[string]$SCVMMServiceAccountUsername,
+	[string]$SCVMMServiceAccountPassword,
+	[string]$DomainFQDN,
+	[string]$DomainNETBIOS,
+	[string]$ServiceAccountOU,
+	[string]$ServerOU
 )
 
 Workflow WF_DeployVMs
@@ -167,27 +176,10 @@ foreach ($VM in $VMNames)
 	Get-VMIntegrationService -VMName $VM -Name "Guest Service Interface" | Enable-VMIntegrationService
 }
 
-$ScriptBlock = {
-param($computerName)
-	Enable-NetFirewallRule -DisplayName "Remote Desktop - User Mode (TCP-In)"
-	Enable-NetFirewallRule -DisplayName "Remote Desktop - Shadow (TCP-In)"
-	Enable-NetFirewallRule -DisplayName "Remote Desktop - User Mode (UDP-In)"
-	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)"
-	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (SMB-In)"
-	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (NB-Name-In)"
-	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (NB-Datagram-In)"
-	Enable-NetFirewallRule -DisplayName "File and Printer Sharing (NB-Session-In)"
-
-	Rename-Computer -NewName $computerName -Restart
-}
-
 $localPassword = ConvertTo-SecureString "F5rr1nt9" -AsPlainText -Force
 $localVMCred = New-Object System.Management.Automation.PSCredential ("Administrator", $localPassword)
 
-foreach ($VM in $VMNames)
-{
+.\CreateADObject.ps1 -SQLServiceAccountUsername $SQLServiceAccountUsername -SQLServiceAccountPassword $SQLServiceAccountPassword -SCVMMServiceAccountUsername $SCVMMServiceAccountUsername -SCVMMServiceAccountPassword $SCVMMServiceAccountPassword -DomainFQDN $DomainFQDN -DomainNETBIOS $DomainNETBIOS -ServiceAccountOU $ServiceAccountOU -ServerOU $ServerOU -VMNames $VMNames
 
-	Invoke-Command -VMName $VM -ScriptBlock $ScriptBlock -Credential $localVMCred -ArgumentList $VM
-}
 
 
