@@ -208,9 +208,6 @@ Workflow WF_DeployVMs
 		}
 	}
 
-    #local administrator password of deployed VMs is set via unattend.xml sysprep. Hardcoded in script
-    $locAdminPassword = ConvertTo-SecureString "F5rr1nt9" -AsPlainText -Force
-
 	#get vSwitch Name
 	$SwitchName = Get-VMSwitch | Select-Object Name
 
@@ -252,13 +249,8 @@ Workflow WF_DeployVMs
 #start workflow
 WF_DeployVMs -VMNames $VMNames -VMRootPath $VMRootPath -VMTemplatePath $VMTemplatePath -VMMinMemory $VMMinMemory -VMMaxMemory $VMMaxMemory -VMStartupMemory $VMStartupMemory -VMprocessorCount $VMprocessorCount
 
-$localPassword = ConvertTo-SecureString "F5rr1nt9" -AsPlainText -Force
-$localVMCred = New-Object System.Management.Automation.PSCredential ("Administrator", $localPassword)
-
 #& ((Split-Path $MyInvocation.InvocationName) + "\CreateADObject.ps1 -SQLServiceAccountUsername $SQLServiceAccountUsername -SQLServiceAccountPassword $SQLServiceAccountPassword -SCVMMServiceAccountUsername $SCVMMServiceAccountUsername -SCVMMServiceAccountPassword $SCVMMServiceAccountPassword -DomainFQDN $DomainFQDN -DomainNETBIOS $DomainNETBIOS -ServiceAccountOU $ServiceAccountOU -ServerOU $ServerOU -VMNames $VMNames")
 CreateADObjects -SQLServiceAccountUsername $SQLServiceAccountUsername -SQLServiceAccountPassword $SQLServiceAccountPassword -SCVMMServiceAccountUsername $SCVMMServiceAccountUsername -SCVMMServiceAccountPassword $SCVMMServiceAccountPassword -DomainFQDN $DomainFQDN -DomainNETBIOS $DomainNETBIOS -ServiceAccountOU $ServiceAccountOU -ServerOU $ServerOU -VMNames $VMNames
-
-
 
 #region wait for VMs to come online
 $boolOnline = $false
@@ -273,12 +265,14 @@ foreach ($VMName in $VMNames)
 		if ($assignedIP)
 		{
 			Write-Host "$VMName has an IP assigned = $assignedIP" -ForegroundColor Yellow
-			Write-Host "Start testing connectivity for VM $VMName ..." -ForegroundColor Yellow
+			Write-Host "Start testing connectivity for VM $VMName with IP address $assignedIP ..." -ForegroundColor Yellow
 			$boolOnline = $true
 			$boolReachable = $false
 			do
 			{
-				if (Test-NetConnection -ComputerName $assignedIP -CommonTCPPort RDP)
+				#start extra sleep of 30 seconds to make sure sysprepped image is completely deployed
+				start-sleep -Seconds 30
+				if (Test-NetConnection -ComputerName $assignedIP -CommonTCPPort RDP -InformationLevel Quiet -ErrorAction SilentlyContinue)
 				{
 					Write-Host "$VMName is reachable, continueing script ..." -ForegroundColor Yellow
 					$boolReachable = $true
@@ -321,6 +315,10 @@ $ADJoinScriptBlock = {
 
     Add-Computer -DomainName $domain -Credential $ADJoinCreds -Force
 }
+
+$localPassword = ConvertTo-SecureString "F5rr1nt9" -AsPlainText -Force
+$localVMCred = New-Object System.Management.Automation.PSCredential ("Administrator", $localPassword)
+
 Foreach ($VMName in $VMNames)
 {
     Invoke-Command -VMName $VMName -Credential $localVMCred -ScriptBlock $ADJoinScriptBlock -ArgumentList $ADJoinUsername,$ADJoinPassword,$DomainFQDN
