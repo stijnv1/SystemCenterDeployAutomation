@@ -38,7 +38,8 @@ param
 	[string]$ServiceAccountOU,
 	[string]$ServerOU,
     [string]$ADJoinUsername,
-    [string]$ADJoinPassword
+    [string]$ADJoinPassword,
+	[string]$VMInfoCSVPath
 )
 
 Function CreateADObjects
@@ -66,7 +67,7 @@ Function CreateADObjects
 	#set read-write service principal name permissions on created service account for SQL
 	$sqlsvcLDAP = "LDAP://$($sqlsvcAccount.DistinguishedName)" 
 	$sqlsvcIdentity = [security.principal.ntaccount]"$DomainNETBIOS\$($sqlsvcAccount.SamAccountName)" 
-	Write-Host "Give Read-Write Service Principal Name permissions ot SQL service account" 
+	Write-Host "Give Read-Write Service Principal Name permissions to SQL service account" 
 	Set-SpnPermission -TargetObject $sqlsvcLDAP -Identity $sqlsvcIdentity -Write -Read  
 	#set trust for delegation flag for SQL service account 
 	$sqlsvcAccount | Set-ADUser -TrustedForDelegation $true 
@@ -74,7 +75,7 @@ Function CreateADObjects
 	#set read-write service principal name permissions on created service account for SCVMM
 	$scvmmsvcLDAP = "LDAP://$($scvmmsvcAccount.DistinguishedName)" 
 	$scvmmsvcIdentity = [security.principal.ntaccount]"$DomainNETBIOS\$($scvmmsvcAccount.SamAccountName)" 
-	Write-Host "Give Read-Write Service Principal Name permissions ot SCVMM service account" 
+	Write-Host "Give Read-Write Service Principal Name permissions to SCVMM service account" 
 	Set-SpnPermission -TargetObject $scvmmsvcLDAP -Identity $scvmmsvcIdentity -Write -Read  
 	#set trust for delegation flag for SQL service account 
 	$scvmmsvcAccount | Set-ADUser -TrustedForDelegation $true
@@ -211,15 +212,12 @@ Workflow WF_DeployVMs
 	#get vSwitch Name
 	$SwitchName = Get-VMSwitch | Select-Object Name
 
+	#start parallel copy action
 	foreach ($VMName in $VMNames)
 	{
 		#create VM directories
 		New-Item -ItemType directory "$VMRootPath\$VMName"
-	}
 
-	#start parallel copy action
-	foreach ($VMName in $VMNames)
-	{
 		#copy VHDX file
 		$vhdxName = "$($VMName)_C.vhdx"
 		Write-Output "Start Copy template VHDX file"
@@ -248,9 +246,10 @@ Workflow WF_DeployVMs
 
 #start workflow
 WF_DeployVMs -VMNames $VMNames -VMRootPath $VMRootPath -VMTemplatePath $VMTemplatePath -VMMinMemory $VMMinMemory -VMMaxMemory $VMMaxMemory -VMStartupMemory $VMStartupMemory -VMprocessorCount $VMprocessorCount
-
-#& ((Split-Path $MyInvocation.InvocationName) + "\CreateADObject.ps1 -SQLServiceAccountUsername $SQLServiceAccountUsername -SQLServiceAccountPassword $SQLServiceAccountPassword -SCVMMServiceAccountUsername $SCVMMServiceAccountUsername -SCVMMServiceAccountPassword $SCVMMServiceAccountPassword -DomainFQDN $DomainFQDN -DomainNETBIOS $DomainNETBIOS -ServiceAccountOU $ServiceAccountOU -ServerOU $ServerOU -VMNames $VMNames")
 CreateADObjects -SQLServiceAccountUsername $SQLServiceAccountUsername -SQLServiceAccountPassword $SQLServiceAccountPassword -SCVMMServiceAccountUsername $SCVMMServiceAccountUsername -SCVMMServiceAccountPassword $SCVMMServiceAccountPassword -DomainFQDN $DomainFQDN -DomainNETBIOS $DomainNETBIOS -ServiceAccountOU $ServiceAccountOU -ServerOU $ServerOU -VMNames $VMNames
+
+#read CSV with VM info
+$VMInfoCSV = Import-Csv $VMInfoCSVPath
 
 #region wait for VMs to come online
 $boolOnline = $false
@@ -307,20 +306,52 @@ $ADJoinScriptBlock = {
     (
         $JoinUsername,
         $JoinPassword,
-        $domain
+        $domain,
+		$VMIPAddress,
+		$VMSubnet,
+		$VMDefaultGateway,
+		$VMPrimDNS
     )
 
+	#change network ip address, assumption: only one network adapter is attached to the VM
+	Get-NetAdapter | New-NetIPAddress -IPAddress $VMIPAddress -PrefixLength $VMSubnet
+	Get-NetAdapter | Set-DnsClientServerAddress -ServerAddresses $VMPrimDNS
+
+	#join to domain
     $JoinPasswordSec = ConvertTo-SecureString $JoinPassword -AsPlainText -Force
-    $ADJoinCreds = New-Object System.Management.Automation.PSCredential ($JoinUsername, $JoinPassword)
+    $ADJoinCreds = New-Object System.Management.Automation.PSCredential ($JoinUsername,$JoinPasswordSec)
 
     Add-Computer -DomainName $domain -Credential $ADJoinCreds -Force
 }
 
 $localPassword = ConvertTo-SecureString "F5rr1nt9" -AsPlainText -Force
-$localVMCred = New-Object System.Management.Automation.PSCredential ("Administrator", $localPassword)
+$localVMCred = New-Object System.Management.Automation.PSCredential "Administrator", $localPassword
 
 Foreach ($VMName in $VMNames)
 {
-    Invoke-Command -VMName $VMName -Credential $localVMCred -ScriptBlock $ADJoinScriptBlock -ArgumentList $ADJoinUsername,$ADJoinPassword,$DomainFQDN
+	#check if VM is online
+	$boolReachable = $false
+
+	Write-Host "Start sleep of 2 minutes before checking connectivity for VM $VMName"
+	Start-Sleep -Seconds 120
+
+	do
+	{
+		if (Test-NetConnection -ComputerName $assignedIP -CommonTCPPort WINRM -InformationLevel Quiet -ErrorAction SilentlyContinue)
+		{
+			Write-Host "Test network connection succeeded for VM $VMName, start powershell direct session ..." -ForegroundColor Green
+			$boolReachable = $true
+			$VMIPAddress = ($VMInfoCSV.Where{$_.VMName -eq $VMName}).IPAddress
+			$VMSubnet = ($VMInfoCSV.Where{$_.VMName -eq $VMName}).Subnet
+			$VMDefaultGateway = ($VMInfoCSV.Where{$_.VMName -eq $VMName}).DefaultGateway
+			$VMPrimDNS = ($VMInfoCSV.Where{$_.VMName -eq $VMName}).PrimaryDNS
+			Invoke-Command -VMName $VMName -Credential $localVMCred -ScriptBlock $ADJoinScriptBlock -ArgumentList $ADJoinUsername,$ADJoinPassword,$DomainFQDN,$VMIPAddress,$VMSubnet,$VMDefaultGateway,$VMPrimDNS
+		}
+		else
+		{
+			Write-Host "VM $VMName not reachable, start sleep for 5 seconds ..." -ForegroundColor Green
+			Start-Sleep -Seconds 5
+		}
+	} while (!$boolReachable)
 }
 #endregion
