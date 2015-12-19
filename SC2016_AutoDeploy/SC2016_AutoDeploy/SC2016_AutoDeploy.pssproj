@@ -29,8 +29,8 @@
   <ItemGroup />
   <ItemGroup>
     <Compile Include="CreateADObjects.ps1" />
-    <Compile Include="DSC_ParentScript.ps1" />
-    <Compile Include="DSC_SQL2014Install.ps1" />
+    <Compile Include="DSC_FormatDisks.ps1" />
+    <Compile Include="DSC_SQLInstall.ps1" />
     <Compile Include="SetupCompleteScript.ps1" />
     <Compile Include="WF_DeployVMs.ps1" />
   </ItemGroup>

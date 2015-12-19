@@ -39,7 +39,10 @@ param
 	[string]$ServerOU,
     [string]$ADJoinUsername,
     [string]$ADJoinPassword,
-	[string]$VMInfoCSVPath
+	[string]$VMInfoCSVPath,
+	[string]$InstallUserName,
+	[string]$InstallPassword,
+	[string]$SourceRootDir
 )
 
 Function CreateADObjects
@@ -115,8 +118,8 @@ Function Set-SpnPermission
 	$accessRuleArgs = $identity,$adRight,"Allow",$spnSecGuid,"None" 
 	$spnAce = new-object DirectoryServices.ActiveDirectoryAccessRule $accessRuleArgs 
 	$TargetObject.psbase.ObjectSecurity.AddAccessRule($spnAce) 
-	$TargetObject.psbase.CommitChanges()     
-	return $spnAce 
+	$TargetObject.psbase.CommitChanges() | Out-Null
+	#return $spnAce 
 } 
 
 Workflow WF_DeployVMs
@@ -201,11 +204,12 @@ Workflow WF_DeployVMs
 
 		finally 
 		{
-			$ffile.Dispose()
-			$tofile.Dispose()
 			write-output (($from.Split("\")|select -last 1) + `
 				" copied in " + $secselapsed + " seconds at " + `
 				"{0:n2}" -f [int](($ffile.length/$secselapsed)/1mb) + " MB/s.");
+
+			$ffile.Dispose()
+			$tofile.Dispose()
 		}
 	}
 
@@ -240,20 +244,22 @@ Workflow WF_DeployVMs
     
 		Set-VM -Name $VMName -ProcessorCount $VMprocessorCount -AutomaticStopAction ShutDown
 		Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes $minMemory -MaximumBytes $maxMemory -StartupBytes $startMemory -Buffer 20
+		New-VHD -Path "$VMRootPath\$VMName\$($VMName)_D.vhdx" -SizeBytes 20GB -Dynamic
+		Add-VMHardDiskDrive -VMName $VMName -ControllerType SCSI -Path "$VMRootPath\$VMName\$($VMName)_D.vhdx"
 		Start-VM -Name $VMName
 	}
 }
 
 #start workflow
 WF_DeployVMs -VMNames $VMNames -VMRootPath $VMRootPath -VMTemplatePath $VMTemplatePath -VMMinMemory $VMMinMemory -VMMaxMemory $VMMaxMemory -VMStartupMemory $VMStartupMemory -VMprocessorCount $VMprocessorCount
-CreateADObjects -SQLServiceAccountUsername $SQLServiceAccountUsername -SQLServiceAccountPassword $SQLServiceAccountPassword -SCVMMServiceAccountUsername $SCVMMServiceAccountUsername -SCVMMServiceAccountPassword $SCVMMServiceAccountPassword -DomainFQDN $DomainFQDN -DomainNETBIOS $DomainNETBIOS -ServiceAccountOU $ServiceAccountOU -ServerOU $ServerOU -VMNames $VMNames
+CreateADObjects -SQLServiceAccountUsername $SQLServiceAccountUsername -SQLServiceAccountPassword $SQLServiceAccountPassword -SCVMMServiceAccountUsername $SCVMMServiceAccountUsername -SCVMMServiceAccountPassword $SCVMMServiceAccountPassword -DomainFQDN $DomainFQDN -DomainNETBIOS $DomainNETBIOS -ServiceAccountOU $ServiceAccountOU -ServerOU $ServerOU -VMNames $VMNames | Out-Null
 
 #read CSV with VM info
 $VMInfoCSV = Import-Csv $VMInfoCSVPath
 
 #region wait for VMs to come online
 $boolOnline = $false
-Write-Host "Start tests to see whether VMs are online and reachable of the network ..." -ForegroundColor Yellow
+Write-Host "Start tests to see whether VMs are online and reachable over the network ..." -ForegroundColor Yellow
 foreach ($VMName in $VMNames)
 {
 	do
@@ -314,14 +320,17 @@ $ADJoinScriptBlock = {
     )
 
 	#change network ip address, assumption: only one network adapter is attached to the VM
-	Get-NetAdapter | New-NetIPAddress -IPAddress $VMIPAddress -PrefixLength $VMSubnet
-	Get-NetAdapter | Set-DnsClientServerAddress -ServerAddresses $VMPrimDNS
+	Get-NetAdapter | New-NetIPAddress -IPAddress $VMIPAddress -PrefixLength $VMSubnet -DefaultGateway $VMDefaultGateway | Out-Null
+	Get-NetAdapter | Set-DnsClientServerAddress -ServerAddresses $VMPrimDNS | Out-Null
+
+	#start sleep for 5 seconds
+	Start-Sleep -Seconds 5
 
 	#join to domain
     $JoinPasswordSec = ConvertTo-SecureString $JoinPassword -AsPlainText -Force
     $ADJoinCreds = New-Object System.Management.Automation.PSCredential ($JoinUsername,$JoinPasswordSec)
 
-    Add-Computer -DomainName $domain -Credential $ADJoinCreds -Force
+    Add-Computer -DomainName $domain -Credential $ADJoinCreds -Restart -Force
 }
 
 $localPassword = ConvertTo-SecureString "F5rr1nt9" -AsPlainText -Force
@@ -332,8 +341,8 @@ Foreach ($VMName in $VMNames)
 	#check if VM is online
 	$boolReachable = $false
 
-	Write-Host "Start sleep of 2 minutes before checking connectivity for VM $VMName"
-	Start-Sleep -Seconds 120
+	Write-Host "Start sleep of 1 minute before checking connectivity for VM $VMName"
+	Start-Sleep -Seconds 60
 
 	do
 	{
@@ -341,10 +350,10 @@ Foreach ($VMName in $VMNames)
 		{
 			Write-Host "Test network connection succeeded for VM $VMName, start powershell direct session ..." -ForegroundColor Green
 			$boolReachable = $true
-			$VMIPAddress = ($VMInfoCSV.Where{$_.VMName -eq $VMName}).IPAddress
-			$VMSubnet = ($VMInfoCSV.Where{$_.VMName -eq $VMName}).Subnet
-			$VMDefaultGateway = ($VMInfoCSV.Where{$_.VMName -eq $VMName}).DefaultGateway
-			$VMPrimDNS = ($VMInfoCSV.Where{$_.VMName -eq $VMName}).PrimaryDNS
+			$VMIPAddress = ($VMInfoCSV | ? {$_.VMName -eq $VMName}).IPAddress
+			$VMSubnet = ($VMInfoCSV | ? {$_.VMName -eq $VMName}).Subnet
+			$VMDefaultGateway = ($VMInfoCSV | ? {$_.VMName -eq $VMName}).DefaultGateway
+			$VMPrimDNS = ($VMInfoCSV | ? {$_.VMName -eq $VMName}).PrimaryDNS
 			Invoke-Command -VMName $VMName -Credential $localVMCred -ScriptBlock $ADJoinScriptBlock -ArgumentList $ADJoinUsername,$ADJoinPassword,$DomainFQDN,$VMIPAddress,$VMSubnet,$VMDefaultGateway,$VMPrimDNS
 		}
 		else
@@ -353,5 +362,26 @@ Foreach ($VMName in $VMNames)
 			Start-Sleep -Seconds 5
 		}
 	} while (!$boolReachable)
+
+	if (($VMInfoCSV | ? {$_.VMName -eq $VMName}).InstallSQL -eq "1")
+	{
+		Write-Host "Start installing SQL 2014 ..." -ForegroundColor Yellow
+		#start sleep because domain join is still in progress
+		Start-Sleep -Seconds 10
+		.\DSC_FormatDisks.ps1 -ServerName $VMName
+		
+		#generate SQL service account credentials
+		$SQLServiceAccountPasswordSec = ConvertTo-SecureString $SQLServiceAccountPassword -AsPlainText -Force
+		$SQLServiceAccountCreds = New-Object System.Management.Automation.PSCredential ("$DomainNETBIOS\$SQLServiceAccountUsername",$SQLServiceAccountPasswordSec) 
+
+		#generate SA credentials
+		$SACreds = New-Object System.Management.Automation.PSCredential ("sa",$SQLServiceAccountPasswordSec)
+
+		#generate Install Credentials
+		$installPasswordSec = ConvertTo-SecureString $InstallPassword -AsPlainText -Force
+		$installCreds = New-Object System.Management.Automation.PSCredential ("$DomainNETBIOS\$InstallUserName",$installPasswordSec)
+
+		.\DSC_SQLInstall -SQLServerName $VMName -SQLServiceAccountCreds $SQLServiceAccountCreds -SACreds $SACreds -InstallCreds $installCreds -SourceRootDir $SourceRootDir
+	}
 }
 #endregion
