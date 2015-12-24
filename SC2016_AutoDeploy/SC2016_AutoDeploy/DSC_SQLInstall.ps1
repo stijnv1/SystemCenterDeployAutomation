@@ -48,7 +48,8 @@ Configuration DSC_SQLInstall
 
 		xSQLServerSetup DefaultInstanceInstallation
 		{
-			SourcePath = "$SourceRootDir\SQL"
+			SourcePath = "$SourceRootDir"
+			SourceFolder = "SQL"
 			SetupCredential = $InstallCreds
 			Features = "SQLENGINE,SSMS,ADV_SSMS,IS,FullText"
 			UpdateEnabled = "false"
