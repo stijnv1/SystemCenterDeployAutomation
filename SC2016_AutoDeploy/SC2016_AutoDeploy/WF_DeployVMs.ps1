@@ -383,5 +383,9 @@ Foreach ($VMName in $VMNames)
 
 		.\DSC_SQLInstall -SQLServerName $VMName -SQLServiceAccountCreds $SQLServiceAccountCreds -SACreds $SACreds -InstallCreds $installCreds -SourceRootDir $SourceRootDir
 	}
+	elseif (($VMInfoCSV | ? {$_.VMName -eq $VMName}).InstallSCVMM -eq "1")
+	{
+
+	}
 }
 #endregion

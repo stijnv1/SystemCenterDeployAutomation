@@ -63,7 +63,7 @@ Configuration DSC_SQLInstall
 			SQLSvcAccount = $SQLServiceAccountCreds
 			AgtSvcAccount = $SQLServiceAccountCreds
 			SecurityMode = "SQL"
-			SAPwd = $SACred
+			SAPwd = $SACreds
 			InstallSQLDataDir = "D:\SQLDATA\"
 			SQLUserDBDir = "D:\SQLDATA\"
 			SQLUserDBLogDir = "D:\SQLLOG\"
