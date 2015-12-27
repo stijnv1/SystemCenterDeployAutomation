@@ -244,8 +244,16 @@ Workflow WF_DeployVMs
     
 		Set-VM -Name $VMName -ProcessorCount $VMprocessorCount -AutomaticStopAction ShutDown
 		Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $true -MinimumBytes $minMemory -MaximumBytes $maxMemory -StartupBytes $startMemory -Buffer 20
-		New-VHD -Path "$VMRootPath\$VMName\$($VMName)_D.vhdx" -SizeBytes 20GB -Dynamic
-		Add-VMHardDiskDrive -VMName $VMName -ControllerType SCSI -Path "$VMRootPath\$VMName\$($VMName)_D.vhdx"
+		if ($VMName -like "*SQL*")
+		{
+			New-VHD -Path "$VMRootPath\$VMName\$($VMName)_D.vhdx" -SizeBytes 20GB -Dynamic
+			Add-VMHardDiskDrive -VMName $VMName -ControllerType SCSI -Path "$VMRootPath\$VMName\$($VMName)_D.vhdx"
+		}
+		elseif ($VMName -like "*VMM*")
+		{
+			New-VHD -Path "$VMRootPath\$VMName\$($VMName)_D.vhdx" -SizeBytes 100GB -Dynamic
+			Add-VMHardDiskDrive -VMName $VMName -ControllerType SCSI -Path "$VMRootPath\$VMName\$($VMName)_D.vhdx"
+		}
 		Start-VM -Name $VMName
 	}
 }
@@ -320,8 +328,8 @@ $ADJoinScriptBlock = {
     )
 
 	#change network ip address, assumption: only one network adapter is attached to the VM
-	Get-NetAdapter | New-NetIPAddress -IPAddress $VMIPAddress -PrefixLength $VMSubnet -DefaultGateway $VMDefaultGateway | Out-Null
-	Get-NetAdapter | Set-DnsClientServerAddress -ServerAddresses $VMPrimDNS | Out-Null
+	Get-NetAdapter | New-NetIPAddress -IPAddress $VMIPAddress -PrefixLength $VMSubnet -DefaultGateway $VMDefaultGateway -AddressFamily IPv4
+	Get-NetAdapter | Set-DnsClientServerAddress -ServerAddresses $VMPrimDNS
 
 	#start sleep for 5 seconds
 	Start-Sleep -Seconds 5
@@ -335,6 +343,13 @@ $ADJoinScriptBlock = {
 
 $localPassword = ConvertTo-SecureString "F5rr1nt9" -AsPlainText -Force
 $localVMCred = New-Object System.Management.Automation.PSCredential "Administrator", $localPassword
+
+#generate Install Credentials
+$installPasswordSec = ConvertTo-SecureString $InstallPassword -AsPlainText -Force
+$installCreds = New-Object System.Management.Automation.PSCredential ("$DomainNETBIOS\$InstallUserName",$installPasswordSec)
+
+#SQL Name variable
+$SQLServerNameVariable = ""
 
 Foreach ($VMName in $VMNames)
 {
@@ -366,6 +381,7 @@ Foreach ($VMName in $VMNames)
 	if (($VMInfoCSV | ? {$_.VMName -eq $VMName}).InstallSQL -eq "1")
 	{
 		Write-Host "Start installing SQL 2014 ..." -ForegroundColor Yellow
+		$SQLServerNameVariable = $VMName
 		#start sleep because domain join is still in progress
 		Start-Sleep -Seconds 10
 		.\DSC_FormatDisks.ps1 -ServerName $VMName
@@ -377,15 +393,25 @@ Foreach ($VMName in $VMNames)
 		#generate SA credentials
 		$SACreds = New-Object System.Management.Automation.PSCredential ("sa",$SQLServiceAccountPasswordSec)
 
-		#generate Install Credentials
-		$installPasswordSec = ConvertTo-SecureString $InstallPassword -AsPlainText -Force
-		$installCreds = New-Object System.Management.Automation.PSCredential ("$DomainNETBIOS\$InstallUserName",$installPasswordSec)
-
 		.\DSC_SQLInstall -SQLServerName $VMName -SQLServiceAccountCreds $SQLServiceAccountCreds -SACreds $SACreds -InstallCreds $installCreds -SourceRootDir $SourceRootDir
 	}
 	elseif (($VMInfoCSV | ? {$_.VMName -eq $VMName}).InstallSCVMM -eq "1")
 	{
+		Write-Host "Start installing SCVMM 2016 ..." -ForegroundColor Yellow
+		#start sleep because domain join is still in progress
+		Start-Sleep -Seconds 10
+		.\DSC_FormatDisks.ps1 -ServerName $VMName
 
+		#generate SCVMM service account credentials
+		$SCVMMServiceAccountPasswordSec = ConvertTo-SecureString $SCVMMServiceAccountPassword -AsPlainText -Force
+		$SCVMMServiceAccountCreds = New-Object System.Management.Automation.PSCredential ("$DomainNETBIOS\$SCVMMServiceAccountUsername",$SCVMMServiceAccountPasswordSec) 
+
+		$SCVMMLibPath = ($VMInfoCSV | ? {$_.VMName -eq $VMName}).SCVMMLibPath
+		$SCVMMLibShare = ($VMInfoCSV | ? {$_.VMName -eq $VMName}).SCVMMLibShare
+		Write-Host "SCVMM Library Path = $SCVMMLibPath" -ForegroundColor DarkMagenta
+		Write-Host "SCVMM Library Share = $SCVMMLibShare" -ForegroundColor DarkMagenta
+
+		.\DSC_SCVMMInstall.ps1 -SCVMMServerName $VMName -SCVMMServiceAccountCreds $SCVMMServiceAccountCreds -InstallCreds $installCreds -SourceRootDir $SourceRootDir -SQLServerName $SQLServerNameVariable -SQLInstanceName "MSSQLServer" -SCVMMLibPath $SCVMMLibPath -SCVMMLibShare $SCVMMLibShare
 	}
 }
 #endregion

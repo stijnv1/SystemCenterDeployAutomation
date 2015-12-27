@@ -23,13 +23,26 @@ Configuration DSC_FormatDisks
             RebootNodeIfNeeded = $true
         }
 
-		xDisk DVolume
-        {
-            DiskNumber = 1
-            DriveLetter = "D"
-            FSLabel = "SQLDATA"
-			AllocationUnitSize = 64kb
-        }
+		if ($MachineName -like "*SQL*")
+		{
+			xDisk DVolume
+			{
+				DiskNumber = 1
+				DriveLetter = "D"
+				FSLabel = "SQLDATA"
+				AllocationUnitSize = 64kb
+			}
+		}
+
+		if ($MachineName -like "*VMM*")
+		{
+			xDisk DVolume
+			{
+				DiskNumber = 1
+				DriveLetter = "D"
+				FSLabel = "SCVMMLib"
+			}
+		}
 	}
 }
 
@@ -62,7 +75,7 @@ Write-Host "DSC configuration is being pushed" -ForegroundColor Yellow
 
 #compile DSC for disk formats
 DSC_FormatDisks -MachineName $ServerName
-$diskJob = Start-DscConfiguration -Path .\DSC_FormatDisks -Verbose
+$diskJob = Start-DscConfiguration -Path .\DSC_FormatDisks -Verbose -Force
 
 $jobRunning = $true
 

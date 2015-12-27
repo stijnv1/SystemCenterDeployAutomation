@@ -30,6 +30,7 @@
   <ItemGroup>
     <Compile Include="CreateADObjects.ps1" />
     <Compile Include="DSC_FormatDisks.ps1" />
+    <Compile Include="DSC_SCVMMInstall.ps1" />
     <Compile Include="DSC_SQLInstall.ps1" />
     <Compile Include="SetupCompleteScript.ps1" />
     <Compile Include="WF_DeployVMs.ps1" />
